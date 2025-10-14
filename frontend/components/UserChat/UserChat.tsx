@@ -9,89 +9,133 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { MessageSquare, Send, LogOut, User } from "lucide-react"
+import { useAuth } from "react-oidc-context"
+import { profile } from "console"
 
 interface Message {
   id: string
-  author: string
+  userName: string
+  userId: string
   content: string
   timestamp: Date
 }
 
-interface ChatInterfaceProps {
+interface LastEvaluatedKey {
+  channel_id: string
+  timestamp_utc_iso8601: string
+}
+
+type UserChatProps = {
   onLogout: () => void
 }
 
-export function ChatInterface({ onLogout }: ChatInterfaceProps) {
-  const [messages, setMessages] = useState<Message[]>([])
-  const [newMessage, setNewMessage] = useState("")
-  const [isLoading, setIsLoading] = useState(false)
-  const [currentPage, setCurrentPage] = useState(1)
-  const [hasMoreMessages, setHasMoreMessages] = useState(true)
-  const scrollAreaRef = useRef<HTMLDivElement>(null)
+export function UserChat({ onLogout }: UserChatProps) {
+  const { user } = useAuth();
 
-  const currentUserId = sessionStorage.getItem("user_id") || "user"
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [lastEvaluatedKey, setLastEvaluatedKey] = useState<LastEvaluatedKey | undefined>(undefined);
 
-  // Mock messages data
-  const generateMockMessages = (page: number): Message[] => {
-    const mockMessages: Message[] = []
-    const startId = (page - 1) * 10
+  const [newMessage, setNewMessage] = useState("");
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
 
-    for (let i = 0; i < 10; i++) {
-      const id = startId + i
-      mockMessages.push({
-        id: `msg_${id}`,
-        author: `user${(id % 5) + 1}`,
-        content: `Message de test numéro ${id + 1}. Ceci est un exemple de contenu de message.`,
-        timestamp: new Date(Date.now() - id * 60000), // Messages every minute
-      })
+  const getMessages = async () => {
+    if (!user) return;
+
+    try {
+      const response = await fetch(
+        "https://a5qxnwgl51.execute-api.eu-west-1.amazonaws.com/prod/messages",
+        { 
+          method: "GET", 
+          headers: { Authorization: user.id_token ?? "" } 
+        }
+      );
+
+      const { messages: newMessages, lastEvaluatedKey } = (await response.json());
+
+      setMessages(newMessages.map((item: any) => ({
+        id: item.id,
+        userName: item.userName,
+        userId: item.userId,
+        content: item.content,
+        timestamp: new Date(item.timestamp_utc_iso8601),
+      } as Message)));
+
+      setLastEvaluatedKey(lastEvaluatedKey);
+
+    } catch (error) {
+      console.error("Error fetching messages:", error)
+      return setMessages([]);
     }
-
-    return mockMessages
   }
 
   // Load initial messages
   useEffect(() => {
-    const initialMessages = generateMockMessages(1)
-    setMessages(initialMessages.reverse())
-
-    // Simulate having more messages for first few pages
-    setHasMoreMessages(currentPage < 5)
+    getMessages();
   }, [])
 
-  const loadMoreMessages = () => {
-    if (!hasMoreMessages || isLoading) return
+  const loadMoreMessages = async () => {
+    if (!user || !hasMoreMessages) return
 
-    setIsLoading(true)
+    try {
+      const response = await fetch(
+        "https://a5qxnwgl51.execute-api.eu-west-1.amazonaws.com/prod/messages"
+         + (lastEvaluatedKey
+        ? `?channel_id=${encodeURIComponent(lastEvaluatedKey.channel_id)}&timestamp_utc_iso8601=${encodeURIComponent(lastEvaluatedKey.timestamp_utc_iso8601)}`
+        : ""),
+        { 
+          method: "GET",
+          headers: { Authorization: user.id_token ?? "" },
+        }
+      );
 
-    // Simulate API call delay
-    setTimeout(() => {
-      const nextPage = currentPage + 1
-      const newMessages = generateMockMessages(nextPage)
+      const { messages: newMessages, lastEvaluatedKey: newLastEvaluatedKey } = (await response.json());
 
-      setMessages((prev) => [...prev, ...newMessages.reverse()])
-      setCurrentPage(nextPage)
-      setHasMoreMessages(nextPage < 5) // Simulate finite messages
-      setIsLoading(false)
-    }, 1000)
+      setMessages((prevMessages) => [...prevMessages, ...newMessages.map((item: any) => ({
+        id: item.id,
+        userName: item.userName,
+        userId: item.userId,
+        content: item.content,
+        timestamp: new Date(item.timestamp_utc_iso8601),
+      } as Message))]);
+
+      setLastEvaluatedKey(newLastEvaluatedKey);
+    } catch (error) {
+      console.error("Error fetching messages:", error)
+      return setMessages([]);
+    }
   }
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (!user) return
     if (!newMessage.trim()) return
 
-    const message: Message = {
-      id: `msg_${Date.now()}`,
-      author: currentUserId,
+    console.log(newMessage);
+
+    const message: Partial<Message> = {
+      userName: user.profile.name ?? "Unknown",
+      userId: user.profile.sub,
       content: newMessage.trim(),
-      timestamp: new Date(),
     }
 
-    setMessages((prev) => [message, ...prev])
-    setNewMessage("")
+    try {
+      await fetch(
+        "https://a5qxnwgl51.execute-api.eu-west-1.amazonaws.com/prod/messages",
+        { 
+          method: "POST", 
+          headers: {
+            Authorization: user.id_token ?? "" 
+          },
+          body: JSON.stringify(message) 
+        }
+      );
 
-    // Simulate API call to save message
-    // In real implementation, this would save to database
-    console.log("Message saved:", message)
+      setNewMessage("");
+      getMessages();
+    } catch (error) {
+      console.error("Error sending message:", error)
+    }
   }
 
   const formatTime = (date: Date) => {
@@ -109,6 +153,8 @@ export function ChatInterface({ onLogout }: ChatInterfaceProps) {
     })
   }
 
+  const hasMoreMessages = Boolean(lastEvaluatedKey);
+
   return (
     <div className="min-h-screen flex flex-col">
       {/* Header */}
@@ -120,10 +166,10 @@ export function ChatInterface({ onLogout }: ChatInterfaceProps) {
             </div>
             <div>
               <CardTitle className="text-lg">Messages</CardTitle>
-              <p className="text-sm text-muted-foreground">Connecté en tant que {currentUserId}</p>
+              <p className="text-sm text-muted-foreground">Connecté en tant que {user?.profile?.name}</p>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={onLogout} className="gap-2 bg-transparent">
+          <Button variant="outline" size="sm" onClick={onLogout} className="gap-2 bg-transparent cursor-pointer">
             <LogOut className="h-4 w-4" />
             Déconnexion
           </Button>
@@ -149,8 +195,8 @@ export function ChatInterface({ onLogout }: ChatInterfaceProps) {
                     </div>
                   )}
 
-                  <div className={`flex gap-3 ${message.author === currentUserId ? "justify-end" : "justify-start"}`}>
-                    {message.author !== currentUserId && (
+                  <div className={`flex gap-3 ${message.userId === user?.profile?.sub ? "justify-end" : "justify-start"}`}>
+                    {message.userId !== user?.profile?.sub && (
                       <Avatar className="h-8 w-8">
                         <AvatarFallback className="text-xs">
                           <User className="h-4 w-4" />
@@ -158,21 +204,21 @@ export function ChatInterface({ onLogout }: ChatInterfaceProps) {
                       </Avatar>
                     )}
 
-                    <div className={`max-w-[70%] ${message.author === currentUserId ? "order-first" : ""}`}>
+                    <div className={`max-w-[70%] ${message.userId === user?.profile?.sub ? "order-first" : ""}`}>
                       <div
                         className={`rounded-lg px-3 py-2 ${
-                          message.author === currentUserId ? "bg-primary text-primary-foreground" : "bg-muted"
+                          message.userId === user?.profile?.sub ? "bg-primary text-primary-foreground" : "bg-muted"
                         }`}
                       >
-                        {message.author !== currentUserId && (
-                          <p className="text-xs font-medium text-muted-foreground mb-1">{message.author}</p>
+                        {message.userId !== user?.profile?.sub && (
+                          <p className="text-xs font-medium text-muted-foreground mb-1">{message.userName}</p>
                         )}
                         <p className="text-sm">{message.content}</p>
                       </div>
                       <p className="text-xs text-muted-foreground mt-1 px-1">{formatTime(message.timestamp)}</p>
                     </div>
 
-                    {message.author === currentUserId && (
+                    {message.userId === user?.profile?.sub && (
                       <Avatar className="h-8 w-8">
                         <AvatarFallback className="text-xs">
                           <User className="h-4 w-4" />
@@ -190,10 +236,9 @@ export function ChatInterface({ onLogout }: ChatInterfaceProps) {
               <Button
                 variant="outline"
                 onClick={loadMoreMessages}
-                disabled={isLoading}
                 className="gap-2 bg-transparent"
               >
-                {isLoading ? "Chargement..." : "Charger plus de messages"}
+                Charger plus de messages
               </Button>
             </div>
           )}

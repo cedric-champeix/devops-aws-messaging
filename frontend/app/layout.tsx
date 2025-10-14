@@ -1,25 +1,25 @@
-import type { Metadata } from 'next'
+"use client"
+
 import { GeistSans } from 'geist/font/sans'
 import { GeistMono } from 'geist/font/mono'
-import { Analytics } from '@vercel/analytics/next'
-import './globals.css'
+import { AuthProvider } from "react-oidc-context";
 
-export const metadata: Metadata = {
-  title: 'v0 App',
-  description: 'Created with v0',
-  generator: 'v0.app',
-}
+import './globals.css'
+import { oidcConfig } from '@/lib/oidcConfig';
+
+import type { ReactNode } from "react"
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode
+  children: ReactNode
 }>) {
   return (
     <html lang="en">
       <body className={`font-sans ${GeistSans.variable} ${GeistMono.variable}`}>
-        {children}
-        <Analytics />
+        <AuthProvider {...oidcConfig}>
+          {children}
+        </AuthProvider>
       </body>
     </html>
   )
