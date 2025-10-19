@@ -5,7 +5,6 @@ const client = new DynamoDBClient({ region: "eu-west-1" });
 const dynamo = DynamoDBDocumentClient.from(client);
 
 const tableName = "dynamodb-all-messages";
-const channelId = "maverick";
 const userName = "Auto Reply Bot";
 const userId = "auto-reply-bot";
 
@@ -14,38 +13,42 @@ const TMDB_URL = `https://api.themoviedb.org/3/movie/now_playing?language=fr-FR&
 
 export const handler = async (event) => {
   try {
-    const body = event;
+    const body = event.detail || {};
 
-    if (!body.content) {
-      return { statusCode: 400, body: "Missing content" };
+    if (!body.content || !body.channelId) {
+      console.warn("Missing content or channelId", body);
+      return;
     }
 
-    let messageContent = body.content;
+    const { content, channelId } = body;
+
     let moviesList = null;
 
-    if (messageContent.includes("/movies")) {
-      const response = await fetch(TMDB_URL, { 
-        method: "GET", 
-        headers: { 
-          accept: "application/json",
-          Authorization: `Bearer ${TMDB_API_KEY}`,
-          "Accept-Encoding": "gzip"
-        } 
-      });
+    if (!content.includes("/movies")) return;
 
-      if (!response.ok)
-        throw new Error(`TMDB API error: ${response.statusText}`);
-      
-      const data = await response.json();
+    const response = await fetch(TMDB_URL, { 
+      method: "GET", 
+      headers: { 
+        accept: "application/json",
+        Authorization: `Bearer ${TMDB_API_KEY}`,
+        "Accept-Encoding": "gzip"
+      } 
+    });
 
-      if (data && data.results && Array.isArray(data.results)) {
-        moviesList = data.results.map((movie) => `• ${movie.title}`).join("\n");
-        messageContent = `Derniers films en salle :\n${moviesList}`;
-      } else {
-        messageContent = "Aucun film trouvé.";
-      }
+    if (!response.ok)
+      throw new Error(`TMDB API error: ${response.statusText}`);
+    
+    const data = await response.json();
+
+    let message;
+
+    if (data && data.results && Array.isArray(data.results)) {
+      moviesList = data.results.map((movie) => `• ${movie.title}`).join("\n");
+      message = `Derniers films en salle :\n${moviesList}`;
+    } else {
+      message = "Aucun film trouvé.";
     }
-
+  
     const timestamp = new Date().toISOString();
 
     await dynamo.send(
@@ -54,19 +57,13 @@ export const handler = async (event) => {
         Item: {
           channel_id: channelId,
           timestamp_utc_iso8601: timestamp,
-          content: messageContent,
+          content: message,
           userName: userName,
           userId: userId,
         },
       })
     );
-
-    return {
-      statusCode: 201,
-      body: { channel_id: channelId, timestamp_utc_iso8601: timestamp },
-      headers: { "Content-Type": "application/json" },
-    };
   } catch (err) {
-    return { statusCode: 500, body: JSON.stringify({ message: err.message || err }) };
+    console.error("Auto-reply error:", err);
   }
 };
